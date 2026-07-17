@@ -177,6 +177,13 @@ def build_profile_xml(profile: dict) -> str:
         if mood:
             _el(mood_el, "feeling", mood, de="Fühle mich")
 
+    # -- Smoking ----------------------------------------------------------- #
+    smoking_id = (lifestyle.get("smoking") or {}).get("id")
+    if smoking_id == 1:
+        _el(root, "smoking", L.OPTIONS.get("smoking_yes"), de="Raucher")
+    elif smoking_id == -1:
+        _el(root, "smoking", L.OPTIONS.get("smoking_no"), de="Raucher")
+
     # -- What they're looking for ----------------------------------------- #
     orientation = p.get("orientation") or {}
     orientation_labels = [
@@ -330,9 +337,16 @@ def main():
         }
     )
 
-    print(f"[1/4] Converting link id: {link_id}")
-    link = convert_link(session, link_id)
-    print(f"      -> link: {link}")
+    # A 20-char id is a shared-link id that must be converted; a 12-char id is
+    # already the internal user link and can be used directly.
+    if len(link_id) == 12:
+        link = link_id
+        print(f"[1/4] Id is already a link ({len(link_id)} chars), skipping convert")
+        print(f"      -> link: {link}")
+    else:
+        print(f"[1/4] Converting link id: {link_id} ({len(link_id)} chars)")
+        link = convert_link(session, link_id)
+        print(f"      -> link: {link}")
 
     print(f"[2/4] Fetching profile (encounter {encounter})")
     profile = fetch_profile(session, encounter, link)
