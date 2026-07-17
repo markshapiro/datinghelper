@@ -58,31 +58,82 @@ SYSTEM_PROMPT = (
 RESULT_SCHEMA = {
     "type": "object",
     "properties": {
-        "vibe": {
+        "mood_energy": {
             "type": "string",
-            "description": "The overall vibe/atmosphere of the photo in a few words.",
+            "description": (
+                "The energy and mood of the person (or the group, if several "
+                "people) and the overall atmosphere of the photo, in a few words."
+            ),
         },
-        "is_selfie": {
-            "type": "boolean",
-            "description": "True if the photo appears to be a selfie (taken by the subject).",
+        "photo_type": {
+            "type": "string",
+            "description": (
+                "How the photo was taken / staged, signalling how much effort "
+                "and personality went into it. E.g. professional shot, candid, "
+                "mirror pic, group photo, posed, snapshot."
+            ),
         },
-        "hobbies_activities": {
+        "setting_type": {
+            "type": "string",
+            "description": (
+                "The recognizable type of setting, and its more specific "
+                "type/origin if detectable (e.g. beach, forest, bar, club, boat, "
+                "park; or more specific: arctic forest, hunting pub, dungeon "
+                "club). Name any identifiable landmark (e.g. Eiffel Tower). "
+                "Empty string if not detectable."
+            ),
+        },
+        "social_context": {
+            "type": "string",
+            "description": (
+                "Number of people and social context: e.g. solo, with friends, "
+                "with a partner, at a group event."
+            ),
+        },
+        "style_signals": {
+            "type": "string",
+            "description": (
+                "Aesthetic / style signals: overall fashion sense and any "
+                "subculture cues (e.g. skater, cottagecore, gym, minimalist, "
+                "streetwear, formal)."
+            ),
+        },
+        "hobbies": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Hobbies or activities detectable in the photo. Empty if none.",
+            "description": (
+                "Activities that can be confidently inferred as a genuine hobby "
+                "or interest from the photo (e.g. hiking, travelling, playing "
+                "guitar, cycling as sport). Do NOT include mundane necessities. "
+                "Empty if none can be confidently inferred as a hobby."
+            ),
         },
-        "setting": {
-            "type": "string",
-            "enum": ["inside", "outside", "unknown"],
-            "description": "Whether the photo was taken indoors or outdoors.",
+        "current_actions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "What the person is literally seen doing right now, regardless "
+                "of whether it is a hobby (e.g. commuting, reading, cycling, "
+                "hiking, playing guitar, eating). This is the raw observed "
+                "action, not an inferred interest. Empty if not discernible."
+            ),
         },
-        "mood": {
-            "type": "string",
-            "description": "The mood of the person in the photo.",
+        "conversation_hooks": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Distinctive objects that invite comment or a conversation "
+                "opener (e.g. a guitar, a specific book title, a dog breed, a "
+                "mountain bike, a chess board). Be specific. Empty if none."
+            ),
         },
-        "clothing": {
-            "type": "string",
-            "description": "The type of clothes the person is wearing.",
+        "pets_animals": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Pets or animals detectable in the photo, with breed/type if "
+                "identifiable (e.g. golden retriever, cat, horse). Empty if none."
+            ),
         },
         "text_and_icons": {
             "type": "array",
@@ -91,12 +142,15 @@ RESULT_SCHEMA = {
         },
     },
     "required": [
-        "vibe",
-        "is_selfie",
-        "hobbies_activities",
-        "setting",
-        "mood",
-        "clothing",
+        "mood_energy",
+        "photo_type",
+        "setting_type",
+        "social_context",
+        "style_signals",
+        "hobbies",
+        "current_actions",
+        "conversation_hooks",
+        "pets_animals",
         "text_and_icons",
     ],
     "additionalProperties": False,
@@ -172,12 +226,15 @@ def build_picture_element(parent, filename: str, result: dict):
     """Append a <picture> record built from one analysis result."""
     pic = ET.SubElement(parent, "picture")
     pic.set("file", filename)
-    _el(pic, "vibe", result.get("vibe", ""))
-    _el(pic, "selfie", "true" if result.get("is_selfie") else "false")
-    _el(pic, "setting", result.get("setting", "unknown"))
-    _el(pic, "mood", result.get("mood", ""))
-    _el(pic, "clothing", result.get("clothing", ""))
-    _list_el(pic, "hobbies", result.get("hobbies_activities"))
+    _el(pic, "mood_energy", result.get("mood_energy", ""))
+    _el(pic, "photo_type", result.get("photo_type", ""))
+    _el(pic, "setting_type", result.get("setting_type", ""))
+    _el(pic, "social_context", result.get("social_context", ""))
+    _el(pic, "style_signals", result.get("style_signals", ""))
+    _list_el(pic, "hobbies", result.get("hobbies"))
+    _list_el(pic, "current_actions", result.get("current_actions"))
+    _list_el(pic, "conversation_hooks", result.get("conversation_hooks"))
+    _list_el(pic, "pets_animals", result.get("pets_animals"))
     _list_el(pic, "text_and_icons", result.get("text_and_icons"))
     return pic
 
