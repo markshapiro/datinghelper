@@ -161,7 +161,13 @@ RESULT_SCHEMA = {
 # XML helpers (mirroring finya_fetch.py's style)
 # --------------------------------------------------------------------------- #
 def _el(parent, tag, text=None, **attrs):
-    """Create a SubElement, optionally with text and attributes."""
+    """Create a SubElement, optionally with text and attributes.
+
+    Scalar fields with no text are skipped so we never emit empty tags.
+    """
+    has_text = text is not None and (not isinstance(text, str) or text.strip())
+    if not has_text and not attrs:
+        return None
     e = ET.SubElement(parent, tag)
     for k, v in attrs.items():
         e.set(k, str(v))
@@ -171,9 +177,12 @@ def _el(parent, tag, text=None, **attrs):
 
 
 def _list_el(parent, tag, values, item_tag="item"):
-    """Create <tag><item>..</item>..</tag>, always present (may be empty)."""
+    """Create <tag><item>..</item>..</tag> only when there are values."""
+    values = [v for v in (values or []) if v and str(v).strip()]
+    if not values:
+        return None
     container = ET.SubElement(parent, tag)
-    for v in values or []:
+    for v in values:
         _el(container, item_tag, v)
     return container
 
