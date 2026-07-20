@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <brand_cache source="finya">
+  <brand id="19">Mercedes-Benz</brand>
+  <brand id="71">Milka</brand>
   <brand id="78">Ritter Sport</brand>
   <brand id="100">Rothmans</brand>
   <brand id="142">Calvin Klein</brand>
@@ -9,6 +11,12 @@
   <brand id="220">Vodafone</brand>
   <brand id="222">RTL</brand>
   <brand id="224">ZDF</brand>
+  <brand id="273">Sony</brand>
   <brand id="1088">alpro soya</brand>
+  <brand id="1097">Dr. Oetker</brand>
+  <brand id="1103">Haribo</brand>
+  <brand id="1151">Amazon</brand>
+  <brand id="1162">YouTube</brand>
+  <brand id="1180">ECCO</brand>
   <brand id="1503">IQOS</brand>
 </brand_cache>
