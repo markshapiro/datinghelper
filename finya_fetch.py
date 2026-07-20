@@ -24,10 +24,12 @@ import os
 import re
 import sys
 import json
+import base64
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlparse
 
+import anthropic
 import requests
 from dotenv import load_dotenv
 
@@ -127,7 +129,7 @@ def _list_el(parent, tag, values, item_tag="item"):
     return container
 
 
-def build_profile_xml(profile: dict) -> str:
+def build_profile_xml(profile: dict, brand_names: dict | None = None) -> str:
     """Render the profile as structured XML.
 
     Design goals for LLM consumption: one concept per element, semantic English
@@ -239,6 +241,21 @@ def build_profile_xml(profile: dict) -> str:
             if el is not None:
                 el.set("de", de)
 
+    # -- Favourite brands (resolved from logo images) ---------------------- #
+    brands = lifestyle.get("brands") if isinstance(lifestyle.get("brands"), list) else []
+    brand_names = brand_names or {}
+    brand_items = [
+        (b.get("id"), brand_names.get(b.get("id")))
+        for b in brands
+        if brand_names.get(b.get("id"))
+        and brand_names.get(b.get("id")) != BRAND_UNKNOWN
+    ]
+    if brand_items:
+        brands_el = ET.SubElement(root, "favourite_brands")
+        brands_el.set("de", "Lieblingsmarken")
+        for brand_id, name in brand_items:
+            _el(brands_el, "brand", name, id=brand_id)
+
     # -- Likes / dislikes from tags --------------------------------------- #
     tags = lifestyle.get("tags") if isinstance(lifestyle.get("tags"), list) else []
     like_labels = [t.get("content") for t in tags if t.get("isLike") is True]
@@ -263,6 +280,154 @@ def build_profile_xml(profile: dict) -> str:
     ET.indent(root, space="  ")
     xml_body = ET.tostring(root, encoding="unicode")
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_body + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# Brands (logo images -> brand names via LLM)
+# --------------------------------------------------------------------------- #
+# Brand ids are global to Finya and repeat across profiles, so resolved names are
+# cached on disk — each brand costs at most one LLM call, ever.
+BRAND_CACHE_PATH = PROJECT_ROOT / "brands.xml"
+BRAND_CACHE_LEGACY_JSON = PROJECT_ROOT / "brand_names.json"
+BRAND_IMG_URL = f"{BASE}/assets/img/b/{{}}.png"
+BRAND_MODEL = "claude-haiku-4-5"
+BRAND_UNKNOWN = "UNKNOWN"
+
+BRAND_PROMPT = (
+    "This image is a brand logo from a German dating site's 'favourite brands' list. "
+    "Identify the brand and reply with ONLY its name (e.g. 'Toyota', 'Samsung', "
+    "'Der Spiegel'). No punctuation, no explanation. "
+    f"If you cannot identify it with confidence, reply with exactly {BRAND_UNKNOWN}."
+)
+
+
+def load_brand_cache() -> dict:
+    """Read brands.xml into a {id(str): name} dict.
+
+    Falls back to importing the legacy brand_names.json once, so previously
+    identified brands are never re-sent to the LLM.
+    """
+    if BRAND_CACHE_PATH.exists():
+        try:
+            root = ET.parse(BRAND_CACHE_PATH).getroot()
+        except (ET.ParseError, OSError):
+            print("  ! Brand cache unreadable, starting fresh", file=sys.stderr)
+            return {}
+        cache = {}
+        for el in root.findall("brand"):
+            brand_id = el.get("id")
+            name = (el.text or "").strip()
+            if brand_id and name:
+                cache[brand_id] = name
+        return cache
+
+    if BRAND_CACHE_LEGACY_JSON.exists():
+        try:
+            legacy = json.loads(BRAND_CACHE_LEGACY_JSON.read_text(encoding="utf-8"))
+            print(f"      -> migrated {len(legacy)} brand(s) from brand_names.json")
+            return {str(k): v for k, v in legacy.items()}
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return {}
+
+
+def save_brand_cache(cache: dict) -> None:
+    """Write the {id: name} dict back out as brands.xml."""
+    root = ET.Element("brand_cache")
+    root.set("source", "finya")
+    # Sort numerically where possible so the file stays stable and diffable.
+    for brand_id in sorted(cache, key=lambda k: (not k.isdigit(), int(k) if k.isdigit() else k)):
+        el = ET.SubElement(root, "brand")
+        el.set("id", brand_id)
+        el.text = cache[brand_id]
+    ET.indent(root, space="  ")
+    BRAND_CACHE_PATH.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        + ET.tostring(root, encoding="unicode")
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def identify_brand(client, session: requests.Session, brand_id) -> str | None:
+    """Download one brand logo and ask the LLM what brand it is."""
+    url = BRAND_IMG_URL.format(brand_id)
+    try:
+        r = session.get(url)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        print(f"  ! Failed to download brand {brand_id}: {e}", file=sys.stderr)
+        return None
+
+    media_type = r.headers.get("content-type", "image/png").split(";")[0]
+    data = base64.standard_b64encode(r.content).decode("utf-8")
+
+    try:
+        resp = client.messages.create(
+            model=BRAND_MODEL,
+            max_tokens=32,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data,
+                            },
+                        },
+                        {"type": "text", "text": BRAND_PROMPT},
+                    ],
+                }
+            ],
+        )
+    except anthropic.APIError as e:
+        print(f"  ! LLM call failed for brand {brand_id}: {e}", file=sys.stderr)
+        return None
+
+    text = next((b.text for b in resp.content if b.type == "text"), "").strip()
+    return text or None
+
+
+def resolve_brands(session: requests.Session, profile: dict) -> dict:
+    """Map every brand id on the profile to a brand name, using the disk cache."""
+    lifestyle = (profile.get("payload") or {}).get("lifestyle") or {}
+    brands = lifestyle.get("brands") if isinstance(lifestyle.get("brands"), list) else []
+    ids = [b.get("id") for b in brands if b.get("id") is not None]
+    if not ids:
+        return {}
+
+    cache = load_brand_cache()
+    missing = [i for i in ids if str(i) not in cache]
+    print(f"      -> {len(ids)} brand(s), {len(missing)} to identify, "
+          f"{len(ids) - len(missing)} cached")
+
+    # Materialise the XML cache on first run (e.g. after a legacy-JSON import),
+    # even when there is nothing new to identify.
+    if cache and not BRAND_CACHE_PATH.exists():
+        save_brand_cache(cache)
+
+    if missing:
+        try:
+            client = anthropic.Anthropic()
+        except Exception as e:
+            print(f"  ! Could not init Anthropic client ({e}); skipping brands",
+                  file=sys.stderr)
+            client = None
+
+        if client is not None:
+            for brand_id in missing:
+                name = identify_brand(client, session, brand_id)
+                if name is None:
+                    continue  # transient failure — don't poison the cache
+                cache[str(brand_id)] = name
+                print(f"  - brand {brand_id}: {name}")
+            save_brand_cache(cache)
+
+    return {i: cache[str(i)] for i in ids if str(i) in cache}
 
 
 # --------------------------------------------------------------------------- #
@@ -341,14 +506,14 @@ def main():
     # already the internal user link and can be used directly.
     if len(link_id) == 12:
         link = link_id
-        print(f"[1/4] Id is already a link ({len(link_id)} chars), skipping convert")
+        print(f"[1/5] Id is already a link ({len(link_id)} chars), skipping convert")
         print(f"      -> link: {link}")
     else:
-        print(f"[1/4] Converting link id: {link_id} ({len(link_id)} chars)")
+        print(f"[1/5] Converting link id: {link_id} ({len(link_id)} chars)")
         link = convert_link(session, link_id)
         print(f"      -> link: {link}")
 
-    print(f"[2/4] Fetching profile (encounter {encounter})")
+    print(f"[2/5] Fetching profile (encounter {encounter})")
     profile = fetch_profile(session, encounter, link)
 
     nickname = (profile.get("payload") or {}).get("nickname") or "unknown"
@@ -362,11 +527,14 @@ def main():
         json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    print("[3/4] Writing profile.xml")
-    content = build_profile_xml(profile)
+    print("[3/5] Identifying brands")
+    brand_names = resolve_brands(session, profile)
+
+    print("[4/5] Writing profile.xml")
+    content = build_profile_xml(profile, brand_names)
     (folder / "profile.xml").write_text(content, encoding="utf-8")
 
-    print("[4/4] Downloading pictures")
+    print("[5/5] Downloading pictures")
     n = download_pictures(session, profile, folder / "pictures")
     print(f"      -> {n} picture(s) downloaded")
 
